@@ -198,8 +198,20 @@ router.post(
   '/removeKey',
   apiAclCheck(ApiType.Sensitive),
   async (req: Request, res: Response): Promise<void> => {
-    // TODO: Check if the user is authorized to remove the credential.
     const credId = req.query.credId as Base64URLString;
+    const {user} = res.locals;
+
+    // Only the owner of the credential may remove it. Otherwise, any signed-in
+    // user could remove another user's passkey just by knowing its ID.
+    const credential = await PublicKeyCredentials.findById(credId);
+    if (
+      !user ||
+      !credential ||
+      user.passkeyUserId !== credential?.passkeyUserId
+    ) {
+      res.status(401).json({error: 'User not authorized.'});
+      return;
+    }
 
     await PublicKeyCredentials.remove(credId);
 
