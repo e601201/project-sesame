@@ -92,6 +92,7 @@ describe('WebAuthn Middlewares', () => {
   let server: http.Server;
   let port: number;
   let mockSession: any = {};
+  let mockLocals: Record<string, any> = {};
 
   beforeAll(async () => {
     app = express();
@@ -100,7 +101,7 @@ describe('WebAuthn Middlewares', () => {
     // Inject mock session and locals
     app.use((req: Request, res: Response, next: NextFunction) => {
       req.session = mockSession;
-      res.locals = {signin_status: 1}; // UserSignInStatus.SignedOut
+      res.locals = {...mockLocals};
       next();
     });
 
@@ -121,6 +122,7 @@ describe('WebAuthn Middlewares', () => {
 
   beforeEach(() => {
     mockSession = {};
+    mockLocals = {signin_status: 1}; // UserSignInStatus.SignedOut
   });
 
   test('signinRequest preserves existing challenge', async () => {
@@ -336,6 +338,71 @@ describe('WebAuthn Middlewares', () => {
       });
       assert.notStrictEqual(status, 200);
       assert.match(body.error, /non-cross-origin/);
+    });
+  });
+
+  describe('removeKey', () => {
+    const ownerPasskeyUserId = crypto.randomBytes(16).toString('base64url');
+    let credId: string;
+
+    beforeEach(async () => {
+      credId = crypto.randomBytes(16).toString('base64url');
+      await PublicKeyCredentials.update({
+        id: credId,
+        passkeyUserId: ownerPasskeyUserId,
+        credentialPublicKey: new SoftwarePasskey().cosePublicKey,
+        credentialType: 'public-key',
+        aaguid: '00000000-0000-0000-0000-000000000000',
+        userVerified: true,
+        transports: ['internal'],
+        credentialDeviceType: 'multiDevice',
+        credentialBackedUp: true,
+        registeredAt: Date.now(),
+      });
+    });
+
+    afterAll(async () => {
+      await PublicKeyCredentials.remove(credId);
+    });
+
+    /**
+     * Requests removal of `credId` as a recently signed-in user.
+     * @param passkeyUserId - The passkey user ID of the signed-in user.
+     * @returns The HTTP status of the response.
+     */
+    async function removeKeyAs(passkeyUserId: string): Promise<number> {
+      mockLocals = {
+        signin_status: 5, // UserSignInStatus.RecentlySignedIn
+        user: {id: 'user-id', username: 'user', passkeyUserId},
+      };
+      const res = await fetch(
+        `http://127.0.0.1:${port}/webauthn/removeKey?credId=${credId}`,
+        {
+          method: 'POST',
+          headers: {'X-Requested-With': 'XMLHttpRequest'},
+        }
+      );
+      return res.status;
+    }
+
+    test("removes the signed-in user's own passkey", async () => {
+      const status = await removeKeyAs(ownerPasskeyUserId);
+      assert.strictEqual(status, 200);
+      assert.strictEqual(
+        await PublicKeyCredentials.findById(credId),
+        undefined,
+        'The passkey should be removed'
+      );
+    });
+
+    test("does not remove another user's passkey", async () => {
+      const otherPasskeyUserId = crypto.randomBytes(16).toString('base64url');
+      const status = await removeKeyAs(otherPasskeyUserId);
+      assert.strictEqual(status, 401);
+      assert.ok(
+        await PublicKeyCredentials.findById(credId),
+        "Another user's passkey must not be removed"
+      );
     });
   });
 });

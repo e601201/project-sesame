@@ -135,6 +135,32 @@ describe('CustomFirestoreStore', () => {
     }
   });
 
+  it('should not restore a field deleted from the session on the next get', async () => {
+    // `SessionService.deleteChallenge()` removes the challenge with `delete`
+    // so that it can't be replayed. The deletion must reach Firestore too.
+    const sid = `sid-test-deleted-field-${Date.now()}`;
+    const sessionData: Record<string, unknown> = {
+      cookie: {originalMaxAge: 3600},
+      challenge: 'single-use-challenge',
+    };
+
+    try {
+      await setSession(sid, sessionData);
+      delete sessionData.challenge;
+      await setSession(sid, sessionData);
+
+      const retrieved = await getSession(sid);
+      assert.ok(retrieved, 'Session should be retrieved');
+      assert.strictEqual(
+        retrieved.challenge,
+        undefined,
+        'A deleted challenge should not be restored from Firestore'
+      );
+    } finally {
+      await destroySession(sid).catch(() => {});
+    }
+  });
+
   it('should compute standard expiration date for non-allowlisted accounts', async () => {
     const sid = `sid-normal-${Date.now()}`;
     const sessionData = {
